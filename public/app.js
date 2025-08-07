@@ -126,6 +126,18 @@ function handleMessage(message) {
             handleSessionResumed(message.data);
             break;
             
+        case 'projectSwitched':
+            console.log('Project switched:', message.data);
+            showToast(`Switched to: ${message.data.projectName}`, 'info');
+            // Clear messages and reload interface
+            document.querySelector('.messages-inner').innerHTML = `
+                <div class="welcome-message">
+                    <h2>Welcome to ${message.data.projectName}</h2>
+                    <p>Start a conversation or load a previous session</p>
+                </div>
+            `;
+            break;
+            
         case 'userInput':
             addMessage(message.data, 'user');
             break;
@@ -1095,6 +1107,115 @@ function executeSlashCommand(command, args) {
         default:
             // Send to backend
             return false;
+    }
+}
+
+// Project management functions
+let currentProject = null;
+
+async function showProjects() {
+    document.getElementById('projectsModal').classList.add('open');
+    closeSidebar();
+    await loadProjects();
+}
+
+async function loadProjects() {
+    try {
+        const response = await fetch('/api/projects');
+        const data = await response.json();
+        
+        const projectsList = document.getElementById('projectsList');
+        projectsList.innerHTML = '';
+        
+        if (data.projects.length === 0) {
+            projectsList.innerHTML = '<p class="empty-message">No projects found in ~/projects</p>';
+            return;
+        }
+        
+        data.projects.forEach(project => {
+            const projectItem = document.createElement('div');
+            projectItem.className = 'project-item' + (project.isCurrent ? ' current' : '');
+            projectItem.innerHTML = `
+                <div class="project-info">
+                    <svg class="project-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" width="20" height="20">
+                        <path d="M3 3h18v18H3zM3 9h18" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <span class="project-name">${project.name}</span>
+                    ${project.isCurrent ? '<span class="current-badge">Current</span>' : ''}
+                </div>
+            `;
+            
+            if (!project.isCurrent) {
+                projectItem.onclick = () => switchProject(project.path);
+            }
+            
+            projectsList.appendChild(projectItem);
+        });
+        
+        currentProject = data.currentProject;
+    } catch (error) {
+        console.error('Error loading projects:', error);
+        showToast('Failed to load projects', 'error');
+    }
+}
+
+async function switchProject(projectPath) {
+    try {
+        const response = await fetch('/api/projects/switch', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ projectPath })
+        });
+        
+        if (!response.ok) {
+            throw new Error('Failed to switch project');
+        }
+        
+        const data = await response.json();
+        showToast(`Switched to project: ${data.projectName}`, 'success');
+        closeModal('projectsModal');
+        
+        // Reload the page to reset the chat interface
+        setTimeout(() => {
+            window.location.reload();
+        }, 500);
+    } catch (error) {
+        console.error('Error switching project:', error);
+        showToast('Failed to switch project', 'error');
+    }
+}
+
+async function createNewProject() {
+    const projectName = prompt('Enter new project name:');
+    
+    if (!projectName || projectName.trim() === '') {
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/projects/create', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ projectName: projectName.trim() })
+        });
+        
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to create project');
+        }
+        
+        const data = await response.json();
+        showToast(`Created project: ${data.projectName}`, 'success');
+        
+        // Switch to the new project
+        await switchProject(data.projectPath);
+    } catch (error) {
+        console.error('Error creating project:', error);
+        showToast(error.message || 'Failed to create project', 'error');
     }
 }
 

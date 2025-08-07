@@ -24,6 +24,7 @@ class ClaudeChatProvider {
     this._requestCount = 0;
     this._currentConversation = [];
     this._conversationStartTime = null;
+    this._thinkingMode = false;
     
     // Initialize storage
     this._initializeStorage();
@@ -44,6 +45,18 @@ class ClaudeChatProvider {
     
     // Set up file watcher for permission requests
     this._setupPermissionWatcher();
+  }
+  
+  cleanup() {
+    // Clean up before switching projects
+    if (this._currentClaudeProcess) {
+      this.stopCurrentRequest();
+    }
+    
+    // Clear permission watcher if exists
+    if (this._permissionWatcher) {
+      this._permissionWatcher.close();
+    }
   }
   
   _initializeStorage() {
@@ -795,8 +808,8 @@ class ClaudeChatProvider {
   
   _setupMCPConfig() {
     try {
-      // Get the path to mcp-permissions.js from the parent directory
-      const mcpPermissionsPath = path.join(__dirname, '..', 'mcp-permissions.js');
+      // Get the path to mcp-permissions.js from the current directory
+      const mcpPermissionsPath = path.join(__dirname, 'mcp-permissions.js');
       
       // Create MCP config
       const mcpConfig = {

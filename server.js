@@ -3,9 +3,10 @@ const { WebSocketServer } = require('ws');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const os = require('os');
 
 // Get project root from command line or use current directory
-const PROJECT_ROOT = process.argv[2] || process.cwd();
+let PROJECT_ROOT = process.argv[2] || process.cwd();
 console.log(`Project root: ${PROJECT_ROOT}`);
 
 const app = express();
@@ -229,6 +230,122 @@ app.get('/api/health', (req, res) => {
     projectRoot: PROJECT_ROOT,
     connected: activeWs !== null 
   });
+});
+
+// Project management endpoints
+app.get('/api/projects', (req, res) => {
+  const projectsDir = path.join(os.homedir(), 'projects');
+  
+  try {
+    const items = fs.readdirSync(projectsDir, { withFileTypes: true });
+    const projects = items
+      .filter(item => item.isDirectory())
+      .map(dir => ({
+        name: dir.name,
+        path: path.join(projectsDir, dir.name),
+        isCurrent: path.join(projectsDir, dir.name) === PROJECT_ROOT
+      }));
+    
+    res.json({ 
+      projects,
+      currentProject: PROJECT_ROOT
+    });
+  } catch (error) {
+    console.error('Error reading projects directory:', error);
+    res.status(500).json({ error: 'Failed to read projects directory' });
+  }
+});
+
+app.get('/api/projects/current', (req, res) => {
+  res.json({ 
+    projectRoot: PROJECT_ROOT,
+    projectName: path.basename(PROJECT_ROOT)
+  });
+});
+
+app.post('/api/projects/switch', express.json(), (req, res) => {
+  const { projectPath } = req.body;
+  
+  if (!projectPath) {
+    return res.status(400).json({ error: 'Project path is required' });
+  }
+  
+  // Validate the project path exists
+  if (!fs.existsSync(projectPath)) {
+    return res.status(400).json({ error: 'Project path does not exist' });
+  }
+  
+  // Update the project root
+  const oldRoot = PROJECT_ROOT;
+  PROJECT_ROOT = projectPath;
+  console.log(`Switching project from ${oldRoot} to ${PROJECT_ROOT}`);
+  
+  // Reinitialize the chat provider with new project root
+  if (chatProvider) {
+    chatProvider.cleanup();
+  }
+  
+  chatProvider = new ClaudeChatProvider(PROJECT_ROOT);
+  
+  // Reconfigure the postMessage override
+  chatProvider._postMessage = (message) => {
+    if (activeWs && activeWs.readyState === 1) {
+      activeWs.send(JSON.stringify(message));
+    }
+  };
+  
+  // Notify connected client about project switch
+  if (activeWs && activeWs.readyState === 1) {
+    activeWs.send(JSON.stringify({ 
+      type: 'projectSwitched',
+      data: {
+        projectRoot: PROJECT_ROOT,
+        projectName: path.basename(PROJECT_ROOT)
+      }
+    }));
+  }
+  
+  res.json({ 
+    success: true,
+    projectRoot: PROJECT_ROOT,
+    projectName: path.basename(PROJECT_ROOT)
+  });
+});
+
+app.post('/api/projects/create', express.json(), (req, res) => {
+  const { projectName } = req.body;
+  
+  if (!projectName) {
+    return res.status(400).json({ error: 'Project name is required' });
+  }
+  
+  // Sanitize project name
+  const sanitizedName = projectName.replace(/[^a-zA-Z0-9-_]/g, '-');
+  const projectsDir = path.join(os.homedir(), 'projects');
+  const newProjectPath = path.join(projectsDir, sanitizedName);
+  
+  // Check if project already exists
+  if (fs.existsSync(newProjectPath)) {
+    return res.status(400).json({ error: 'Project already exists' });
+  }
+  
+  try {
+    // Create the project directory
+    fs.mkdirSync(newProjectPath, { recursive: true });
+    
+    // Create a README file
+    const readmeContent = `# ${projectName}\n\nCreated on ${new Date().toLocaleDateString()}\n`;
+    fs.writeFileSync(path.join(newProjectPath, 'README.md'), readmeContent);
+    
+    res.json({ 
+      success: true,
+      projectName: sanitizedName,
+      projectPath: newProjectPath
+    });
+  } catch (error) {
+    console.error('Error creating project:', error);
+    res.status(500).json({ error: 'Failed to create project' });
+  }
 });
 
 // Start server
